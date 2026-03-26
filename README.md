@@ -48,14 +48,120 @@ Implementing real-world concurrent data structures and high-performance crawlers
 
 Which synchronization tool to reach for, and when, within the JVM ecosystem.
 
-| Primitive | Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
-|-----------|----------|------------------------|-------------------|
-| `CountDownLatch` | One-way execution gates | `CountDownLatch(n)` | Force Thread B to wait for Thread A |
-| `Semaphore` | Permit-based throttling | `Semaphore(available)` | Orchestrate turn-taking (Ping-Pong) |
-| `ReentrantLock` | Fine-grained Mutex | `lock.withLock { ... }` | Protect shared counters/collections |
-| `Condition` | Advanced signaling | `condition.await()` | Wait for a specific logical state |
-| `CyclicBarrier` | Multi-thread rendezvous | `CyclicBarrier(parties)` | Wait for a full set of threads to arrive |
-| `Volatile` | Memory visibility | `@Volatile var flag` | Ensure threads see the latest value |
+### `CountDownLatch`
+| Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
+|----------|------------------------|-------------------|
+| One-way execution gates | `CountDownLatch(n)` | Force Thread B to wait for Thread A |
+
+```kotlin
+// 1114. Print in Order
+val latch2 = CountDownLatch(1)
+val latch3 = CountDownLatch(1)
+
+fun first()  { print("first");  latch2.countDown() }
+fun second() { latch2.await();  print("second"); latch3.countDown() }
+fun third()  { latch3.await();  print("third") }
+```
+
+---
+
+### `Semaphore`
+| Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
+|----------|------------------------|-------------------|
+| Permit-based throttling | `Semaphore(available)` | Orchestrate turn-taking (Ping-Pong) |
+
+```kotlin
+// 1116. Print Zero Even Odd
+val zeroSem = Semaphore(1)   // zero goes first
+val evenSem = Semaphore(0)
+val oddSem  = Semaphore(0)
+
+fun zero() { zeroSem.acquire(); print(0); oddSem.release() }  // simplified
+fun odd()  { oddSem.acquire();  print(i); zeroSem.release() }
+fun even() { evenSem.acquire(); print(i); zeroSem.release() }
+```
+
+---
+
+### `ReentrantLock`
+| Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
+|----------|------------------------|-------------------|
+| Fine-grained Mutex | `lock.withLock { ... }` | Protect shared counters/collections |
+
+```kotlin
+// 1226. The Dining Philosophers
+val forkLocks = Array(5) { ReentrantLock() }
+
+fun eat(philosopher: Int) {
+    val left  = forkLocks[philosopher]
+    val right = forkLocks[(philosopher + 1) % 5]
+    left.withLock {
+        right.withLock {
+            print("Philosopher $philosopher is eating")
+        }
+    }
+}
+```
+
+---
+
+### `Condition`
+| Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
+|----------|------------------------|-------------------|
+| Advanced signaling | `condition.await()` | Wait for a specific logical state |
+
+```kotlin
+// 1188. Design Bounded Blocking Queue
+val lock      = ReentrantLock()
+val notFull   = lock.newCondition()
+val notEmpty  = lock.newCondition()
+
+fun enqueue(elem: Int) = lock.withLock {
+    while (queue.size == capacity) notFull.await()  // block if full
+    queue.add(elem)
+    notEmpty.signal()                               // wake a waiting dequeue
+}
+
+fun dequeue(): Int = lock.withLock {
+    while (queue.isEmpty()) notEmpty.await()        // block if empty
+    val elem = queue.poll()
+    notFull.signal()                                // wake a waiting enqueue
+    elem
+}
+```
+
+---
+
+### `CyclicBarrier`
+| Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
+|----------|------------------------|-------------------|
+| Multi-thread rendezvous | `CyclicBarrier(parties)` | Wait for a full set of threads to arrive |
+
+```kotlin
+// 1117. Building H2O
+val barrier = CyclicBarrier(3)  // 2 H threads + 1 O thread must arrive together
+
+fun hydrogen() { barrier.await(); releaseHydrogen() }
+fun oxygen()   { barrier.await(); releaseOxygen() }
+// All three block at barrier.await() until a complete H2O set is ready
+```
+
+---
+
+### `Volatile`
+| Use Case | Idiomatic Kotlin / JVM | LeetCode Strategy |
+|----------|------------------------|-------------------|
+| Memory visibility | `@Volatile var flag` | Ensure threads see the latest value |
+
+```kotlin
+// 1279. Traffic Light Junction
+@Volatile var currentRoad = 1  // writer thread flips this
+
+fun carArrived(roadId: Int) {
+    while (currentRoad != roadId) { /* spin */ }  // reader always sees latest value
+    crossCar()
+}
+```
 
 ---
 
