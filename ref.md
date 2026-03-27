@@ -1,145 +1,212 @@
-# 🧵 JVM & Kotlin Concurrency Guide
+# 🧵 JVM & Kotlin Concurrency — Advanced Reference Guide
 
 <p align="center">
-  <b>High-performance concurrency for Java & Kotlin</b><br>
-  Atomics · Concurrent Collections · Queues · Coroutines
+  <b>Deep dive into high-performance concurrency</b><br>
+  Atomics · Concurrent Collections · Queues · Locks · Coroutines · Patterns
 </p>
 
 ---
 
-## ⚡ Overview
+# ⚡ Overview
 
-This guide covers the **core building blocks of concurrency on the JVM**:
+This guide goes beyond basics and focuses on **real-world engineering trade-offs**:
 
-- Lock-free programming with **Atomics**
-- High-throughput **Concurrent Collections**
-- Producer–Consumer pipelines with **Blocking Queues**
-- Structured concurrency using **Kotlin Coroutines**
+- Lock-free vs blocking synchronization
+- Throughput vs latency under contention
+- JVM threads vs Kotlin coroutines
+- Choosing the *right* primitive for the job
 
 ---
 
 # 1️⃣ Atomic Primitives (Lock-Free)
 
-> 🚀 Best for: **Counters, flags, and simple shared state**
+> 🚀 Best for: **Small shared state, counters, flags**
 
-- No locks
-- Uses **CAS (Compare-And-Swap)**
-- Extremely fast under low/moderate contention
+### 🧠 Core Idea
+
+Atomics use **CAS (Compare-And-Swap)**:
+
+1. Read current value
+2. Try to update if unchanged
+3. Retry if failed
+
+No locks → no thread blocking → high performance
+
+---
 
 ### 🔹 Key Types
 
 | Type | Use Case |
 |------|--------|
 | `AtomicInteger` | Counters |
+| `AtomicLong` | High-range counters |
 | `AtomicBoolean` | Flags |
-| `AtomicReference<T>` | Immutable object updates |
-| `LongAdder` | High-contention counters |
+| `AtomicReference<T>` | Immutable updates |
+| `LongAdder` | High contention counters |
+
+---
+
+### ⚖️ AtomicInteger vs LongAdder
+
+| Feature | AtomicInteger | LongAdder |
+|--------|-------------|----------|
+| Contention | Poor | Excellent |
+| Memory | Low | Higher |
+| Accuracy | Exact | Eventually consistent |
+
+👉 Use `LongAdder` for metrics systems.
 
 ---
 
 ### 💻 Example
 
 ```kotlin
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
-class AnalyticsTracker {
-    private val requestCount = AtomicInteger(0)
+data class User(val id: Int)
 
-    fun registerRequest() {
-        val current = requestCount.incrementAndGet()
-        println("Request #$current processed.")
-    }
+val ref = AtomicReference(User(1))
+
+fun updateUser() {
+    ref.updateAndGet { it.copy(id = it.id + 1) }
 }
 ```
 
 ---
 
-# 2️⃣ Concurrent Collections
+# 2️⃣ Locks & Synchronization (JVM)
 
-> 🚀 Best for: **Shared data structures across threads**
-
-### ❌ Problem
-
-HashMap + multiple threads → ConcurrentModificationException
+> 🚀 Best for: **Complex shared state**
 
 ---
 
-### ✅ Solutions
-
-#### 🗺 Maps
-
-- `ConcurrentHashMap` → High-performance, scalable
-- `ConcurrentSkipListMap` → Sorted + thread-safe
-
-#### 📋 Lists
-
-- `CopyOnWriteArrayList`
-  - ✅ Read-heavy workloads
-  - ❌ Expensive writes
-
----
-
-### 💻 Example
+### 🔒 synchronized
 
 ```kotlin
-import java.util.concurrent.ConcurrentHashMap
+class Counter {
+    private var count = 0
 
-val userCache = ConcurrentHashMap<Int, String>()
-
-fun getOrFetchUser(id: Int): String {
-    return userCache.computeIfAbsent(id) {
-        "User-$id"
+    @Synchronized
+    fun increment() {
+        count++
     }
+}
+```
+
+✔ Simple  
+❌ Blocks threads  
+❌ No timeout / fairness  
+
+---
+
+### 🔒 ReentrantLock
+
+```kotlin
+import java.util.concurrent.locks.ReentrantLock
+
+val lock = ReentrantLock()
+
+fun criticalSection() {
+    lock.lock()
+    try {
+        // critical work
+    } finally {
+        lock.unlock()
+    }
+}
+```
+
+✔ More control (tryLock, fairness)  
+✔ Better for complex flows  
+
+---
+
+# 3️⃣ Concurrent Collections
+
+> 🚀 Best for: **Shared data across threads**
+
+---
+
+### 🗺 ConcurrentHashMap
+
+- Segment-based / striped locking
+- Non-blocking reads
+- High scalability
+
+```kotlin
+val map = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+fun getOrPut(id: Int): String {
+    return map.computeIfAbsent(id) { "User-$id" }
 }
 ```
 
 ---
 
-# 3️⃣ Blocking Queues (Producer–Consumer)
+### 📋 CopyOnWriteArrayList
 
-> 🚀 Best for: **Pipelines, job processing, backpressure**
+✔ Safe iteration  
+✔ No locks for reads  
+❌ Expensive writes (full copy)
+
+---
+
+### 🌲 ConcurrentSkipListMap
+
+✔ Sorted  
+✔ Thread-safe  
+❌ Slower than HashMap  
+
+---
+
+# 4️⃣ Blocking Queues (Backpressure)
+
+> 🚀 Best for: **Pipelines & task processing**
 
 ---
 
 ### 🔹 Types
 
-| Queue | Behavior |
+| Queue | Use Case |
 |------|--------|
-| `LinkedBlockingQueue` | General purpose |
-| `ArrayBlockingQueue` | Fixed size |
-| `PriorityBlockingQueue` | Sorted |
-| `SynchronousQueue` | Direct handoff |
+| `LinkedBlockingQueue` | General |
+| `ArrayBlockingQueue` | Fixed memory |
+| `PriorityBlockingQueue` | Scheduling |
+| `SynchronousQueue` | Thread handoff |
 
 ---
 
-### 💻 Example
+### 💻 Worker Pool Example
 
 ```kotlin
-import java.util.concurrent.LinkedBlockingQueue
+val queue = java.util.concurrent.LinkedBlockingQueue<Runnable>()
 
-val workQueue = LinkedBlockingQueue<Runnable>(10)
-
-fun submitTask(task: Runnable) {
-    workQueue.put(task)
-}
-
-fun runWorker() {
+fun worker() {
     while (true) {
-        val task = workQueue.take()
-        task.run()
+        queue.take().run()
     }
 }
 ```
 
 ---
 
-# 4️⃣ Kotlin Coroutine Synchronization
+# 5️⃣ Kotlin Coroutines (Modern Concurrency)
 
-> ⚠️ DO NOT use `synchronized` with coroutines
+> 🚀 Best for: **Scalable async systems**
 
 ---
 
-## 🔒 Mutex (Non-blocking lock)
+## 🔥 Key Difference
+
+| Threads | Coroutines |
+|--------|----------|
+| Expensive | Lightweight |
+| Blocking | Non-blocking |
+| OS managed | Kotlin managed |
+
+---
+
+## 🔒 Mutex (Coroutine Lock)
 
 ```kotlin
 import kotlinx.coroutines.sync.Mutex
@@ -155,54 +222,127 @@ suspend fun deposit(amount: Int) {
 }
 ```
 
+✔ Suspends instead of blocking  
+✔ Safe for structured concurrency  
+
 ---
 
-## 🚦 Semaphore (Concurrency limiter)
+## 🚦 Semaphore
 
 ```kotlin
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-val requestLimit = Semaphore(3)
+val semaphore = Semaphore(3)
 
-suspend fun downloadFile() {
-    requestLimit.withPermit {
-        println("Downloading...")
+suspend fun task() {
+    semaphore.withPermit {
+        println("Running")
     }
 }
 ```
+
+✔ Limits concurrency  
+
+---
+
+## 🔄 Channels (Producer–Consumer)
+
+```kotlin
+import kotlinx.coroutines.channels.Channel
+
+val channel = Channel<Int>()
+
+suspend fun producer() {
+    repeat(5) { channel.send(it) }
+}
+
+suspend fun consumer() {
+    for (x in channel) println(x)
+}
+```
+
+✔ Non-blocking queue  
+✔ Backpressure built-in  
+
+---
+
+## 🌊 Flow (Reactive Streams)
+
+```kotlin
+import kotlinx.coroutines.flow.*
+
+fun stream() = flow {
+    emit(1)
+    emit(2)
+}
+```
+
+✔ Async data streams  
+✔ Cold & lazy  
+
+---
+
+# 6️⃣ Patterns (Real Engineering)
+
+---
+
+### 🧩 Worker Pool
+
+- Queue + threads
+- Scales processing
+
+---
+
+### 🧩 Rate Limiter
+
+- Semaphore-based
+
+---
+
+### 🧩 Cache
+
+- ConcurrentHashMap + computeIfAbsent
+
+---
+
+### 🧩 Actor Model (Coroutines)
+
+- Channel per actor
+- No shared state
 
 ---
 
 # 🧠 Cheat Sheet
 
-| Problem | Tool |
-|--------|------|
-| Counter | `AtomicLong` |
-| Heavy contention | `LongAdder` |
-| Thread-safe map | `ConcurrentHashMap` |
-| Read-heavy list | `CopyOnWriteArrayList` |
-| Task queue | `LinkedBlockingQueue` |
-| Coroutine locking | `Mutex` |
+| Problem | Solution |
+|--------|--------|
+| Counter | Atomic / LongAdder |
+| Complex state | Lock |
+| Shared map | ConcurrentHashMap |
+| Pipeline | BlockingQueue |
+| Async system | Coroutines |
+| Limit concurrency | Semaphore |
 
 ---
 
-# ⚖️ When to Use What
+# ⚖️ Decision Guide
 
 Single variable → Atomic  
+High contention → LongAdder  
 Shared structure → Concurrent Collection  
-Task pipeline → Queue  
-Coroutines → Mutex / Semaphore  
+Blocking workflow → Queue  
+Async scalable → Coroutines  
 
 ---
 
 # 🚀 Pro Tips
 
-- Prefer **immutability + AtomicReference**
-- Use **LongAdder** for metrics
-- Avoid CopyOnWrite in write-heavy paths
-- Use queues to decouple systems
-- Never block threads inside coroutines
+- Prefer **immutability**
+- Avoid shared state when possible
+- Use **coroutines over threads**
+- Measure performance — don’t guess
+- Keep concurrency **simple**
 
 ---
 
@@ -210,5 +350,5 @@ Coroutines → Mutex / Semaphore
 
 - Backend Engineers
 - Android Developers
-- JVM / Kotlin Developers
+- JVM Engineers
 - System Design learners
